@@ -67,6 +67,11 @@ export default function MBRDashboardPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
+  // State for AI summary
+  const [aiSummary, setAiSummary] = useState<string | null>(null);
+  const [aiLoading, setAiLoading] = useState<boolean>(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+
   useEffect(() => {
     const fetchMbrData = async () => {
       try {
@@ -86,6 +91,104 @@ export default function MBRDashboardPage() {
 
     fetchMbrData();
   }, []);
+
+  // Function to generate AI summary
+  const generateAiSummary = async () => {
+    setAiLoading(true);
+    setAiError(null);
+    setAiSummary(null); // Clear previous summary
+
+    try {
+      if (!mbrData) {
+        setAiError("No MBR data available to generate a summary.");
+        setAiLoading(false);
+        return;
+      }
+
+      // --- NEW: Long and Detailed Prompt for AI ---
+      let promptText = `
+        You are an AI assistant specialized in Talent Acquisition (TA) operations.
+        Your task is to analyze the provided raw data from various TA sheets and generate a comprehensive Monthly Business Review (MBR) executive summary.
+
+        The data provided includes:
+        - 'mcubeData': Contains requisition details including 'RMG ID' and 'Request Created Date'.
+        - 'taTrackerData': Contains candidate journey details, including 'RMG ID', 'Hiring Status' (e.g., 'Joined'), 'Joining Date', 'Department', 'Role', 'Source'.
+        - 'offersTrackerData': Contains offer status details with 'Offer Status' (e.g., 'Accepted', 'Declined') and 'Offer Decline Reason'.
+        - 'vendorConsolidatedData': Contains details on profiles submitted by external vendors, including 'Vendor Name' and 'Profile Status'.
+        - 'interviewListData': Currently empty, but will contain interview scheduling and feedback data when populated.
+
+        Based on this data, please provide an executive summary (3-5 concise bullet points) that covers the following aspects:
+
+        **1. Key Achievements and Positive Trends:**
+        - Highlight strong performance indicators (e.g., high offer acceptance rate, significant number of joined candidates).
+        - Point out any positive trends in 'Time to Fill' (from metrics or inferred from data).
+        - Note effective 'Source' channels or 'Vendor' performance.
+
+        **2. Significant Challenges and Negative Trends:**
+        - Identify areas needing improvement (e.g., low offer acceptance rate, high decline reasons, long 'Time to Fill' for specific departments/roles).
+        - Analyze 'Offer Decline Reason' in 'offersTrackerData' to pinpoint recurring issues.
+        - Comment on any potential bottlenecks inferred from data (e.g., low conversion rates if you can deduce stages).
+
+        **3. Data Insights and Potential Inconsistencies/Anomalies:**
+        - **Recruitment Funnel Gaps:** Look for patterns indicating where candidates might be dropping off (e.g., many offers but few joins, many interviews but few offers - although detailed interview data is currently missing, analyze the available transitions).
+        - **Time-to-Fill Anomalies:** Examine 'timeToFillDetails' in 'metrics'. If a 'Joining Date' in 'taTrackerData' is *before* a 'Request Created Date' in 'mcubeData' for the same 'RMG ID', flag this as a data inconsistency. Also, highlight unusually long or short 'daysToFill' values.
+        - **Cross-Sheet Consistency:** Are there any 'RMG ID's or 'Candidate ID's (if applicable and present) that appear in one sheet but are missing or have conflicting status in another, suggesting data entry issues? (Focus primarily on RMG ID for Mcube/TA Tracker linkage).
+
+        **4. Actionable Insights and Recommendations:**
+        - Based on your analysis, suggest concrete areas for further investigation or immediate action for the TA team or leadership.
+        - For example: "Investigate high decline rate in X department due to Y reason," or "Optimize sourcing from Z channel based on high joiner count."
+
+        **Format your response as a clear, easy-to-read list of bullet points.**
+      `;
+
+      // --- Send ALL relevant data to the AI ---
+      // Instead of just 'metrics', send the raw data from all relevant sheets.
+      // The AI can then "read" these "sheets" (as JSON arrays)
+      const dataToSend = {
+        mcubeData: mbrData.mcubeData,
+        taTrackerData: mbrData.taTrackerData,
+        offersTrackerData: mbrData.offersTrackerData,
+        vendorConsolidatedData: mbrData.vendorConsolidatedData,
+        interviewListData: mbrData.interviewListData, // Including this even if empty, as context
+        // Also send the pre-calculated metrics for quick reference
+        metrics: {
+          overallTimeToFillAverageDays: mbrData.metrics.overallTimeToFillAverageDays,
+          offerAcceptanceRate: mbrData.metrics.offerAcceptanceRate,
+          totalJoinedCandidates: mbrData.metrics.timeToFillDetails.length,
+          offerStatusBreakdown: mbrData.metrics.offerStatusBreakdown,
+          sourceOfHireBreakdown: mbrData.metrics.sourceOfHireBreakdown,
+          joinersByDepartment: mbrData.metrics.joinersByDepartment,
+          vendorSubmissionsByVendor: mbrData.metrics.vendorSubmissionsByVendor,
+        }
+      };
+
+      const response = await fetch('/api/get-ai-summary', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ prompt: promptText, data: dataToSend }),
+      });
+
+      if (!response.ok) {
+        const errorDetail = await response.json();
+        throw new Error(`HTTP error! status: ${response.status} - ${errorDetail.error || 'Unknown API Error'}`);
+      }
+
+      const result = await response.json();
+      if (result.summary) {
+        setAiSummary(result.summary);
+      } else {
+        throw new Error('AI summary not found in response or unexpected response structure.');
+      }
+    } catch (e: any) {
+      console.error('Failed to generate AI summary:', e);
+      setAiError(e.message || 'An unknown error occurred while generating AI summary.');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
 
   if (loading) {
     return (
@@ -146,6 +249,31 @@ export default function MBRDashboardPage() {
             {mbrData.metrics.timeToFillDetails.length}
           </p>
         </div>
+      </div>
+
+      {/* AI Powered Executive Summary */}
+      <div className="bg-white p-6 rounded-lg shadow-lg border border-orange-200 mb-12">
+        <h2 className="text-2xl font-semibold text-gray-800 mb-4 text-center">AI Powered Executive Summary</h2>
+        <div className="text-center mb-4">
+          <button
+            onClick={generateAiSummary}
+            disabled={aiLoading}
+            className="bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 px-6 rounded-lg shadow-md transition duration-300 ease-in-out disabled:opacity-50"
+          >
+            {aiLoading ? 'Generating Summary...' : 'Generate AI Summary'}
+          </button>
+        </div>
+        {aiError && (
+          <div className="text-red-600 text-center mb-4">{aiError}</div>
+        )}
+        {aiSummary && (
+          <div className="bg-gray-100 p-4 rounded-lg text-gray-700 whitespace-pre-wrap">
+            {aiSummary}
+          </div>
+        )}
+        {!aiLoading && !aiSummary && !aiError && (
+            <div className="text-gray-500 text-center">Click "Generate AI Summary" to get insights based on current data.</div>
+        )}
       </div>
 
       {/* Charts Section */}
